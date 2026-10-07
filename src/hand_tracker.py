@@ -24,7 +24,7 @@ if not camera.isOpened():
 screen_width, screen_height = pyautogui.size()
 
 # -------------------------
-# Cursor smoothing
+# Cursor settings
 # -------------------------
 
 smoothing = 0.25
@@ -32,12 +32,7 @@ smoothing = 0.25
 previous_x = screen_width // 2
 previous_y = screen_height // 2
 
-# -------------------------
-# Cursor tracking area
-# -------------------------
-# The index base (#5) movement inside this
-# camera range is mapped to the entire screen.
-
+# Index base (#5) tracking area
 x_min = 0.30
 x_max = 0.70
 
@@ -45,17 +40,19 @@ y_min = 0.30
 y_max = 0.70
 
 # -------------------------
-# Pinch settings
+# Gesture settings
 # -------------------------
 
-is_pinching = False
+is_left_pinching = False
+is_right_pinching = False
 
 pinch_threshold = 0.05
 release_threshold = 0.08
 
 print(f"Screen: {screen_width}x{screen_height}")
-print("Move the base of your index finger to control the cursor.")
-print("Pinch your thumb and index finger to click.")
+print("Move index finger base to control cursor.")
+print("Thumb + index = left click.")
+print("Thumb + middle = right click.")
 print("Press Q to quit.")
 
 try:
@@ -66,10 +63,8 @@ try:
         if not success:
             break
 
-        # Mirror camera
         frame = cv2.flip(frame, 1)
 
-        # BGR -> RGB
         rgb_frame = cv2.cvtColor(
             frame,
             cv2.COLOR_BGR2RGB
@@ -86,30 +81,23 @@ try:
                 # -------------------------
 
                 index_base = hand_landmarks.landmark[5]
-                index_tip = hand_landmarks.landmark[8]
                 thumb = hand_landmarks.landmark[4]
+                index_finger = hand_landmarks.landmark[8]
+                middle_finger = hand_landmarks.landmark[12]
 
                 # -------------------------
-                # Use index base (#5)
-                # as cursor tracker
+                # Cursor movement
                 # -------------------------
 
                 x = index_base.x
                 y = index_base.y
 
-                # -------------------------
-                # Map camera range
-                # to entire screen
-                # -------------------------
-
                 x = (x - x_min) / (x_max - x_min)
                 y = (y - y_min) / (y_max - y_min)
 
-                # Keep inside 0-1
                 x = max(0.0, min(x, 1.0))
                 y = max(0.0, min(y, 1.0))
 
-                # Convert to screen coordinates
                 target_x = int(
                     x * (screen_width - 1)
                 )
@@ -117,10 +105,6 @@ try:
                 target_y = int(
                     y * (screen_height - 1)
                 )
-
-                # -------------------------
-                # Cursor smoothing
-                # -------------------------
 
                 current_x = previous_x + (
                     target_x - previous_x
@@ -139,25 +123,58 @@ try:
                 )
 
                 # -------------------------
-                # Pinch detection
+                # Calculate distances
                 # -------------------------
 
-                dx = thumb.x - index_tip.x
-                dy = thumb.y - index_tip.y
+                index_dx = thumb.x - index_finger.x
+                index_dy = thumb.y - index_finger.y
 
-                distance = (
-                    dx * dx + dy * dy
+                middle_dx = thumb.x - middle_finger.x
+                middle_dy = thumb.y - middle_finger.y
+
+                index_distance = (
+                    index_dx * index_dx
+                    + index_dy * index_dy
                 ) ** 0.5
 
-                if (
-                    distance < pinch_threshold
-                    and not is_pinching
-                ):
-                    pyautogui.click()
-                    is_pinching = True
+                middle_distance = (
+                    middle_dx * middle_dx
+                    + middle_dy * middle_dy
+                ) ** 0.5
 
-                elif distance > release_threshold:
-                    is_pinching = False
+                # -------------------------
+                # Left click
+                # -------------------------
+
+                if (
+                    index_distance < pinch_threshold
+                    and index_distance < middle_distance
+                    and not is_left_pinching
+                ):
+                    pyautogui.click(button="left")
+                    is_left_pinching = True
+
+                # -------------------------
+                # Right click
+                # -------------------------
+
+                elif (
+                    middle_distance < pinch_threshold
+                    and middle_distance < index_distance
+                    and not is_right_pinching
+                ):
+                    pyautogui.click(button="right")
+                    is_right_pinching = True
+
+                # -------------------------
+                # Release states
+                # -------------------------
+
+                if index_distance > release_threshold:
+                    is_left_pinching = False
+
+                if middle_distance > release_threshold:
+                    is_right_pinching = False
 
                 # -------------------------
                 # Draw landmarks
@@ -170,11 +187,9 @@ try:
                 )
 
         else:
-            is_pinching = False
 
-        # -------------------------
-        # Display camera
-        # -------------------------
+            is_left_pinching = False
+            is_right_pinching = False
 
         cv2.imshow(
             "HandMouse",
