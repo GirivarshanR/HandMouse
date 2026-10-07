@@ -28,6 +28,13 @@ while True:
 
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
+            index_finger = hand_landmarks.landmark[8]
+            x = index_finger.x
+            y = index_finger.y
+
+            print(f"Index: x={x:.2f}, y={y:.2f}")
+
+
 
             mp_draw.draw_landmarks(
                 frame,
