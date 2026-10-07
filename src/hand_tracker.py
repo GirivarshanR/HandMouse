@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 import pyautogui
+import time
 
 pyautogui.PAUSE = 0
 
@@ -45,17 +46,28 @@ y_max = 0.70
 
 is_left_pinching = False
 is_right_pinching = False
+is_dragging = False
 
-pinch_threshold = 0.05
-release_threshold = 0.08
+pinch_start_time = 0
+
+# Position when pinch begins
+click_x = 0
+click_y = 0
+
+pinch_threshold = 0.035
+release_threshold = 0.065
+
+drag_hold_time = 0.5
 
 print(f"Screen: {screen_width}x{screen_height}")
 print("Move index finger base to control cursor.")
-print("Thumb + index = left click.")
+print("Quick thumb + index pinch = left click.")
+print("Hold thumb + index pinch = drag.")
 print("Thumb + middle = right click.")
 print("Press Q to quit.")
 
 try:
+
     while True:
 
         success, frame = camera.read()
@@ -80,13 +92,13 @@ try:
                 # Get landmarks
                 # -------------------------
 
-                index_base = hand_landmarks.landmark[5]
+                index_base = hand_landmarks.landmark[13]
                 thumb = hand_landmarks.landmark[4]
                 index_finger = hand_landmarks.landmark[8]
                 middle_finger = hand_landmarks.landmark[12]
 
                 # -------------------------
-                # Cursor movement
+                # Cursor position
                 # -------------------------
 
                 x = index_base.x
@@ -117,13 +129,8 @@ try:
                 previous_x = current_x
                 previous_y = current_y
 
-                pyautogui.moveTo(
-                    int(current_x),
-                    int(current_y)
-                )
-
                 # -------------------------
-                # Calculate distances
+                # Calculate pinch distances
                 # -------------------------
 
                 index_dx = thumb.x - index_finger.x
@@ -143,37 +150,101 @@ try:
                 ) ** 0.5
 
                 # -------------------------
-                # Left click
+                # Start left pinch
                 # -------------------------
 
                 if (
-                    index_distance < pinch_threshold
+                    not is_left_pinching
+                    and not is_right_pinching
+                    and index_distance < pinch_threshold
                     and index_distance < middle_distance
-                    and not is_left_pinching
                 ):
-                    pyautogui.click(button="left")
+
                     is_left_pinching = True
+
+                    pinch_start_time = time.time()
+
+                    # Save where the click started
+                    click_x = int(current_x)
+                    click_y = int(current_y)
+
+                # -------------------------
+                # Left pinch is active
+                # -------------------------
+
+                if is_left_pinching:
+
+                    pinch_duration = (
+                        time.time() - pinch_start_time
+                    )
+
+                    # Become drag after hold time
+                    if (
+                        pinch_duration >= drag_hold_time
+                        and not is_dragging
+                    ):
+
+                        pyautogui.mouseDown(
+                            button="left"
+                        )
+
+                        is_dragging = True
+
+                    # Release pinch
+                    if index_distance > release_threshold:
+
+                        if is_dragging:
+
+                            pyautogui.mouseUp(
+                                button="left"
+                            )
+
+                            is_dragging = False
+
+                        else:
+
+                            # Quick pinch = click
+                            pyautogui.click(
+                                x=click_x,
+                                y=click_y,
+                                button="left"
+                            )
+
+                        is_left_pinching = False
+
+                # -------------------------
+                # Normal cursor movement
+                # -------------------------
+
+                pyautogui.moveTo(
+                    int(current_x),
+                    int(current_y)
+                )
 
                 # -------------------------
                 # Right click
                 # -------------------------
 
-                elif (
-                    middle_distance < pinch_threshold
+                if (
+                    not is_left_pinching
+                    and not is_dragging
+                    and middle_distance < pinch_threshold
                     and middle_distance < index_distance
                     and not is_right_pinching
                 ):
-                    pyautogui.click(button="right")
+
+                    pyautogui.click(
+                        button="right"
+                    )
+
                     is_right_pinching = True
 
                 # -------------------------
-                # Release states
+                # Release right pinch
                 # -------------------------
 
-                if index_distance > release_threshold:
-                    is_left_pinching = False
-
                 if middle_distance > release_threshold:
+
                     is_right_pinching = False
 
                 # -------------------------
@@ -188,8 +259,16 @@ try:
 
         else:
 
+            # Safety release
+            if is_dragging:
+
+                pyautogui.mouseUp(
+                    button="left"
+                )
+
             is_left_pinching = False
             is_right_pinching = False
+            is_dragging = False
 
         cv2.imshow(
             "HandMouse",
@@ -200,6 +279,12 @@ try:
             break
 
 finally:
+
+    if is_dragging:
+
+        pyautogui.mouseUp(
+            button="left"
+        )
 
     camera.release()
     hands.close()
