@@ -1,9 +1,12 @@
 import cv2
 import mediapipe as mp
 import pyautogui
+import math
 import time
 
 pyautogui.PAUSE = 0
+
+camera = cv2.VideoCapture("http://192.168.31.91:8080/video")
 
 mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
@@ -15,277 +18,245 @@ hands = mp_hands.Hands(
     min_tracking_confidence=0.7
 )
 
-camera = cv2.VideoCapture(
-    "http://192.168.31.91:8080/video"
-)
-
-if not camera.isOpened():
-    raise RuntimeError("Could not open webcam")
-
 screen_width, screen_height = pyautogui.size()
 
-# -------------------------
-# Cursor settings
-# -------------------------
+previous_x = None
+previous_y = None
 
 smoothing = 0.25
 
-previous_x = screen_width // 2
-previous_y = screen_height // 2
-
-# Index base (#5) tracking area
 x_min = 0.30
 x_max = 0.70
-
 y_min = 0.30
 y_max = 0.70
 
-# -------------------------
-# Gesture settings
-# -------------------------
+# Gestures
+left_pinching = False
+right_pinching = False
+dragging = False
 
-is_left_pinching = False
-is_right_pinching = False
-is_dragging = False
-
-pinch_start_time = 0
-
-# Position when pinch begins
-click_x = 0
-click_y = 0
+left_pinch_start = None
+right_pinch_start = None
 
 pinch_threshold = 0.035
 release_threshold = 0.065
-
 drag_hold_time = 0.5
 
-print(f"Screen: {screen_width}x{screen_height}")
-print("Move index finger base to control cursor.")
-print("Quick thumb + index pinch = left click.")
-print("Hold thumb + index pinch = drag.")
-print("Thumb + middle = right click.")
-print("Press Q to quit.")
+# Scroll
+is_scrolling = False
 
-try:
+while True:
+    success, frame = camera.read()
 
-    while True:
+    if not success:
+        print("Could not read camera")
+        break
 
-        success, frame = camera.read()
+    frame = cv2.flip(frame, 1)
 
-        if not success:
-            break
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb_frame)
 
-        frame = cv2.flip(frame, 1)
+    if results.multi_hand_landmarks:
 
-        rgb_frame = cv2.cvtColor(
+        hand = results.multi_hand_landmarks[0]
+        landmarks = hand.landmark
+
+        mp_draw.draw_landmarks(
             frame,
-            cv2.COLOR_BGR2RGB
+            hand,
+            mp_hands.HAND_CONNECTIONS
         )
 
-        results = hands.process(rgb_frame)
+        # Cursor
+        cursor = landmarks[13]
 
-        if results.multi_hand_landmarks:
+        x = (cursor.x - x_min) / (x_max - x_min)
+        y = (cursor.y - y_min) / (y_max - y_min)
 
-            for hand_landmarks in results.multi_hand_landmarks:
+        x = max(0, min(1, x))
+        y = max(0, min(1, y))
 
-                # -------------------------
-                # Get landmarks
-                # -------------------------
+        target_x = int(x * (screen_width - 1))
+        target_y = int(y * (screen_height - 1))
 
-                index_base = hand_landmarks.landmark[13]
-                thumb = hand_landmarks.landmark[4]
-                index_finger = hand_landmarks.landmark[8]
-                middle_finger = hand_landmarks.landmark[12]
+        if previous_x is None:
+            previous_x = target_x
+            previous_y = target_y
 
-                # -------------------------
-                # Cursor position
-                # -------------------------
+        smooth_x = previous_x + (target_x - previous_x) * smoothing
+        smooth_y = previous_y + (target_y - previous_y) * smoothing
 
-                x = index_base.x
-                y = index_base.y
+        # Pinch distances
+        thumb_tip = landmarks[4]
+        index_finger = landmarks[8]
+        middle_finger = landmarks[12]
 
-                x = (x - x_min) / (x_max - x_min)
-                y = (y - y_min) / (y_max - y_min)
+        index_distance = math.sqrt(
+            (thumb_tip.x - index_finger.x) ** 2 +
+            (thumb_tip.y - index_finger.y) ** 2
+        )
 
-                x = max(0.0, min(x, 1.0))
-                y = max(0.0, min(y, 1.0))
+        middle_distance = math.sqrt(
+            (thumb_tip.x - middle_finger.x) ** 2 +
+            (thumb_tip.y - middle_finger.y) ** 2
+        )
 
-                target_x = int(
-                    x * (screen_width - 1)
-                )
+        # Finger positions
+        index_joint = landmarks[6]
+        middle_joint = landmarks[10]
 
-                target_y = int(
-                    y * (screen_height - 1)
-                )
+        ring_finger = landmarks[16]
+        ring_joint = landmarks[14]
 
-                current_x = previous_x + (
-                    target_x - previous_x
-                ) * smoothing
+        pinky_finger = landmarks[20]
+        pinky_joint = landmarks[18]
 
-                current_y = previous_y + (
-                    target_y - previous_y
-                ) * smoothing
+        index_extended = index_finger.y < index_joint.y
+        middle_extended = middle_finger.y < middle_joint.y
 
-                previous_x = current_x
-                previous_y = current_y
+        ring_folded = ring_finger.y > ring_joint.y
+        pinky_folded = pinky_finger.y > pinky_joint.y
 
-                # -------------------------
-                # Calculate pinch distances
-                # -------------------------
+        finger_gap = math.sqrt(
+            (index_finger.x - middle_finger.x) ** 2 +
+            (index_finger.y - middle_finger.y) ** 2
+        )
 
-                index_dx = thumb.x - index_finger.x
-                index_dy = thumb.y - index_finger.y
+        thumb_is_clear = (
+            index_distance > release_threshold and
+            middle_distance > release_threshold
+        )
 
-                middle_dx = thumb.x - middle_finger.x
-                middle_dy = thumb.y - middle_finger.y
+        index_bend = math.sqrt(
+            (index_finger.x - index_joint.x) ** 2 +
+            (index_finger.y - index_joint.y) ** 2
+        )
 
-                index_distance = (
-                    index_dx * index_dx
-                    + index_dy * index_dy
-                ) ** 0.5
+        middle_bend = math.sqrt(
+            (middle_finger.x - middle_joint.x) ** 2 +
+            (middle_finger.y - middle_joint.y) ** 2
+        )
 
-                middle_distance = (
-                    middle_dx * middle_dx
-                    + middle_dy * middle_dy
-                ) ** 0.5
+        # Left click and drag
+        if index_distance < pinch_threshold:
 
-                # -------------------------
-                # Start left pinch
-                # -------------------------
+            if not left_pinching:
+                left_pinching = True
+                left_pinch_start = time.time()
 
-                if (
-                    not is_left_pinching
-                    and not is_right_pinching
-                    and index_distance < pinch_threshold
-                    and index_distance < middle_distance
-                ):
+        elif index_distance > release_threshold:
 
-                    is_left_pinching = True
+            if left_pinching:
 
-                    pinch_start_time = time.time()
+                pinch_duration = time.time() - left_pinch_start
 
-                    # Save where the click started
-                    click_x = int(current_x)
-                    click_y = int(current_y)
+                if dragging:
 
-                # -------------------------
-                # Left pinch is active
-                # -------------------------
+                    pyautogui.mouseUp()
+                    dragging = False
 
-                if is_left_pinching:
-
-                    pinch_duration = (
-                        time.time() - pinch_start_time
-                    )
-
-                    # Become drag after hold time
-                    if (
-                        pinch_duration >= drag_hold_time
-                        and not is_dragging
-                    ):
-
-                        pyautogui.mouseDown(
-                            button="left"
-                        )
-
-                        is_dragging = True
-
-                    # Release pinch
-                    if index_distance > release_threshold:
-
-                        if is_dragging:
-
-                            pyautogui.mouseUp(
-                                button="left"
-                            )
-
-                            is_dragging = False
-
-                        else:
-
-                            # Quick pinch = click
-                            pyautogui.click(
-                                x=click_x,
-                                y=click_y,
-                                button="left"
-                            )
-
-                        is_left_pinching = False
-
-                # -------------------------
-                # Normal cursor movement
-                # -------------------------
-
-                pyautogui.moveTo(
-                    int(current_x),
-                    int(current_y)
-                )
-
-                # -------------------------
-                # Right click
-                # -------------------------
-
-                if (
-                    not is_left_pinching
-                    and not is_dragging
-                    and middle_distance < pinch_threshold
-                    and middle_distance < index_distance
-                    and not is_right_pinching
-                ):
+                elif pinch_duration < drag_hold_time:
 
                     pyautogui.click(
-                        button="right"
+                        int(smooth_x),
+                        int(smooth_y)
                     )
 
-                    is_right_pinching = True
+                left_pinching = False
+                left_pinch_start = None
 
-                # -------------------------
-                # Release right pinch
-                # -------------------------
+        if left_pinching and not dragging:
 
-                if middle_distance > release_threshold:
+            if time.time() - left_pinch_start >= drag_hold_time:
 
-                    is_right_pinching = False
-
-                # -------------------------
-                # Draw landmarks
-                # -------------------------
-
-                mp_draw.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    mp_hands.HAND_CONNECTIONS
+                pyautogui.moveTo(
+                    int(smooth_x),
+                    int(smooth_y)
                 )
+
+                pyautogui.mouseDown()
+                dragging = True
+
+        # Right click
+        if (
+            not left_pinching
+            and not dragging
+            and middle_distance < pinch_threshold
+            and middle_distance < index_distance
+        ):
+
+            if not right_pinching:
+
+                pyautogui.click(
+                    int(smooth_x),
+                    int(smooth_y),
+                    button="right"
+                )
+
+                right_pinching = True
+
+        elif middle_distance > release_threshold:
+
+            right_pinching = False
+
+        # Scroll
+        scroll_gesture = (
+            not left_pinching
+            and not dragging
+            and not right_pinching
+            and ring_folded
+            and pinky_folded
+            and finger_gap < 0.07
+            and thumb_is_clear
+        )
+
+        if scroll_gesture:
+
+            is_scrolling = True
+
+            if index_extended and middle_extended:
+
+                pyautogui.scroll(1)
+
+            elif index_bend < 0.10 and middle_bend < 0.10:
+
+                pyautogui.scroll(-1)
 
         else:
 
-            # Safety release
-            if is_dragging:
+            is_scrolling = False
 
-                pyautogui.mouseUp(
-                    button="left"
-                )
+        # Cursor position
+        if not is_scrolling:
 
-            is_left_pinching = False
-            is_right_pinching = False
-            is_dragging = False
+            pyautogui.moveTo(
+                int(smooth_x),
+                int(smooth_y)
+            )
 
-        cv2.imshow(
-            "HandMouse",
-            frame
-        )
+        previous_x = smooth_x
+        previous_y = smooth_y
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+    else:
 
-finally:
+        if dragging:
+            pyautogui.mouseUp()
 
-    if is_dragging:
+        left_pinching = False
+        right_pinching = False
+        dragging = False
 
-        pyautogui.mouseUp(
-            button="left"
-        )
+        left_pinch_start = None
+        right_pinch_start = None
 
-    camera.release()
-    hands.close()
-    cv2.destroyAllWindows()
+        is_scrolling = False
+
+    cv2.imshow("HandMouse", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break
+
+camera.release()
+hands.close()
+cv2.destroyAllWindows()
